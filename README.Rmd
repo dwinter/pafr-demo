@@ -1,16 +1,28 @@
+---                                                                                   
+output: github_document        
+title: pafr demo
+---                                                                                   
+                  
+
 # Comparative genomics in fungi
 
-```sh
-wget --no-check-certificate -O data/seqs/A_flav_SU-16.fna.gz  \
-https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/009/856/665/GCA_009856665.1_ASM985666v1/GCA_009856665.1_ASM985666v1_genomic.fna.gz
 
-wget --no-check-certificate -O data/seqs/A_flav_CA14.fna.gz  \
-https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/014/784/225/GCA_014784225.1_ASM1478422v1/GCA_014784225.1_ASM1478422v1_genomic.fna.gz
-
+```{r, echo=FALSE}
+library(ggplot2)
+theme_set(theme_bw(base_size=16))
+knitr::opts_chunk$set(fig.width=12, fig.height=8) 
+```
+```{bash, setup}
+bash scripts/download_genomes.sh
+echo 'export "MM_CPU=5"' > .shell_vars
 ```
 
-```sh
-minimap2 -t10 -xc ams5 data/seqs/A_flav_CA14.fna.gz data/seqs/A_flav_NRRL 3357.fna.gz > data/ali/aflav_ali.paf
+```{bash}
+source .shell_vars
+if [ ! -f data/ali/aflav_ali.paf ];
+then
+    minimap2 -t ${MM_CPU} -cx asm5 data/seqs/A_flav_CA14.fna.gz data/seqs/A_flav_SU-16.fna.gz > data/ali/aflav_ali.paf
+fi
 ```
 
 ```{r}
@@ -37,32 +49,33 @@ head(inversion_intervals)
 
 
 ```{r}
-write_bed(inv, "data/results/inversion_query.bed")
+write_bed(inversion_intervals, "data/results/inversion_query.bed")
 ```
 
 ```{sh}
-bedtools merge -d 5000 -i inversion.bed
+bedtools merge -d 5000 -i data/results/inversion_query.bed
 ```
 
 # Comparing draft and finished genome assemblies
 
-```sh
-wget -O data/seqs/kea.fna.gz https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/696/875/GCA_000696875.1_ASM69687v1/GCA_000696875.1_ASM69687v1_genomic.fna.gz
-wget -O data/seqs/kakapo.fna.gz https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/004/027/225/GCA_004027225.2_bStrHab1.2.pri/GCA_004027225.2_bStrHab1.2.pri_genomic.fna.gz
-```
 
-```sh
-minimap2 -t20  -cx asm20 data/seqs/kea.fna.gz data/seqs/kakapo.fna.gz | gzip > data/ali/parrots.paf.gz
+```{bash}
+source .shell_vars
+if [ ! -f data/ali/parrots.paf.gz ]
+then
+    minimap2 -t ${MM_CPU} -cx asm20 data/seqs/kea.fna.gz data/seqs/kakapo.fna.gz | gzip > data/ali/parrots.paf.gz
+fi
 ```
 
 ```{r}
 parrots <- read_paf("data/ali/parrots.paf.gz")
 hq_parrots <- subset(filter_secondary_alignments(parrots), mapq > 50)
 hq_parrots
+```
+
 
 ```{r}
-dotplot(hq_parrots, order_by="qstart", dashes=FALSE ,label_seqs=TRUE) +
-    theme_bw()
+dotplot(hq_parrots, order_by="qstart", dashes=FALSE ,label_seqs=TRUE) 
 ```
 
 ```{r}
