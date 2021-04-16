@@ -1,0 +1,218 @@
+---                                                                                   
+output: github_document        
+title: pafr demo
+---                                                                                   
+
+```{r, echo=FALSE}
+library(ggplot2)
+theme_set(theme_bw(base_size=20))
+knitr::opts_chunk$set(fig.width=14, fig.height=9)
+```
+
+# Prerequisites, setting up and running this document
+
+This document demonstrates pafr using both the R code required to read.
+manipulate and plot alignments and `minimap2` and make the alignments and
+`bedtools` to analyse some outputs. 
+
+To run all of the code you will need minimap2 and bedtools. These program are
+available in many package managers. For example, you could install them from
+anaconda: 
+
+```sh
+conda install -c bioconda minimap2=2.17
+conda install -c bedtools=2.30.0
+```
+
+All of the R packages required for the analyses are installed alongside pafr, so
+you just need to install the package.
+
+```r
+install.packages("pafr")
+```
+
+In order to minimize the size of this repository, the sequences required for 
+these analyses are not included. Instead, the script in 
+`scripts/download_genomes.sh` will check if the right sequences exists and 
+download them if not. Running the markdown document will run this script, so you
+probably don't need to do anything special.
+
+
+This code block also sets the number of CPUs to use for minimap. Because of the
+way Rmarkdown runs bash commands environmental variables don't survive from one 
+code block to another. So we store this variable in a file that is sourced every
+time we need it (`.shell_vars`). Changing '5' in this code block to some other 
+number will change the number of CPUs used in alignment.
+
+```{bash, setup}
+bash scripts/download_genomes.sh
+echo 'export "MM_CPU=5"' > .shell_vars
+```
+
+Finally, to run all of the code in this document we can first clone this
+repository:
+
+```sh
+git clone https://github.com/dwinter/pafr-demo
+cd pafr-demo
+```
+
+In R from withing the cloned repo you can now use rmarkdown to run this clode
+and make a local html output:
+
+```r
+rmarkdown::render('README.Rmd')
+```
+
+# First example: comparative genomics in fungi
+
+We will start by using pafr to compare two finished genomes. We will use genomes 
+of two _Aspergiullus flavus_ isolates and an example. (If you were wondering, 
+_A. flavus_ is a fungus that is often grows as a mold on grains and nuts, where
+it can produce toxins that are dangerous for humans and animals). These genomes
+are both full chromosomal assemblies.
+
+Because we now these genomes represent two strains on of single fungal species
+we will use the `minimap2` preset `-x asm5`. This argument sets the alignment
+paramters such alignments drop off when the best matching sequence ~5% divergent. 
+Note, this does not mean this preset should be used when genomes are _on
+average_ 5% divergent, rather it's the upper limit of the most divergent
+sections between genomes. The `asm5` present is recommended for within-species
+comparisons or comparisons of alternative assemblies of the same genome.
+
+`minimap2` treats the first sequenced passed to it as the "target" sequence in
+an alignment and the second one as the "query". So in the following code strain
+CA14 is the taret and SU-16 the query. The  aligned `.paf` is written to
+standard out, so we redirect that output to a new file. Finally, the `if` 
+block in this bash code prevents us re-running an alignment if there is an 
+existing one present.
+
+
+```{bash}
+source .shell_vars
+if [ ! -f data/ali/aflav_ali.paf ];
+then
+    minimap2 -t ${MM_CPU} -x asm5 data/seqs/A_flav_CA14.fna.gz data/seqs/A_flav_SU-16.fna.gz > data/ali/aflav_ali.paf
+fi
+```
+
+Now that we have an alignment we can load `pafr` and read this file in to our R
+session.
+
+```{r}
+library(pafr)
+
+asper <- read_paf("data/ali/aflav_ali.paf")
+asper
+```
+
+The print statement of the alignment gives us a brief summary of what the file
+contains. It is worth remembering that outputs of `minimap2` will typically 
+include secondary alignments (i.e. alternative mappings of a given genomic 
+segment that are nearly as well supported as the primary mapping). The number 
+and genomic distribution of secondary mappings can be interesting, but in the 
+interest of  having a short demonstration we will simply remove these from the 
+alignment.
+
+
+```{r}
+asper_clean <- filter_secondary_alignments(asper)
+asper_clean
+```
+
+Now that we have a clean alignment, let's make a dotplot to visualise how the 
+two genomes compare.
+
+
+```{r}
+dotplot(asper_clean, order_by="qstart", label_seqs=TRUE)
+```
+
+Here we can see many whole chromosomes basically match up from one to strain to
+the other. There are also a few rearrangements and what appears to be a small
+inversion in the chrosome labelled `CP047251.1` in query.
+
+A synteny plot is a nice way to focus in on the alignments between two of the
+sequences in a paf file. Here we plot the alignments in the chromosomes
+associated with that inversion (setting  `rc=TRUE` to account for the fact the
+majority of alignments are in the reverse and complement).
+
+```{r}
+plot_synteny(asper, t_chrom="CP061809.1", q_chrom="CP047251.1", rc=TRUE)
+```
+
+The inverted segment really sticks out, but you can also see it is made of
+several independent alignments in the file. This is often the case with .paf files, as an
+aligned block will end when it hits a difficult-to-align region (perhaps repeat-rich
+sequence or large indel).  To get a better idea of what is is in the inverted
+region we can extract genomic intervals of the target or query sequence in be
+format.
+
+Because the inversion is the only positive strand alignment between these
+chromsomes it's quite easy to seperate it. (In other cases, you might also need
+to subset by the query and target start and end positions, `qstart`, `qend`,
+`tstart` and `tend`). Using `query_bed` we get the standard bed format the
+positions of the alignment in th
+
+```{r}
+inv <- subset(asper, tname=="CP061809.1" & qname=="CP047251.1" & strand=="+")
+inversion_intervals <-  query_bed(inv)
+head(inversion_intervals)
+```
+
+There are tools to work on genomic intervals within R  (the `valr` package
+vignette [lists some
+here](https://cran.r-project.org/web/packages/valr/vignettes/valr.html#related-work)), 
+but we can also write these intervals out to 
+
+```{r}
+write_bed(inversion_intervals, "data/results/inversion_query.bed")
+```
+
+```{sh}
+bedtools merge -d 5000 -i data/results/inversion_query.bed
+```
+
+# Comparing draft and finished genome assemblies
+
+
+```{bash}
+source .shell_vars
+if [ ! -f data/ali/parrots.paf.gz ]
+then
+    minimap2 -t ${MM_CPU} -cx asm20 data/seqs/kea.fna.gz data/seqs/kakapo.fna.gz | gzip > data/ali/parrots.paf.gz
+fi
+```
+
+```{r}
+parrots <- read_paf("data/ali/parrots.paf.gz")
+hq_parrots <- subset(filter_secondary_alignments(parrots), mapq > 50)
+hq_parrots
+```
+
+
+```{r}
+dotplot(hq_parrots, order_by="qstart", dashes=FALSE ,label_seqs=TRUE) 
+```
+
+```{r}
+sex_chrom_map <- c("CM013773.2" = "Z", "CM013763.2" = "W")
+sex_chrom_ali <- subset(hq_parrots, qname %in% names(sex_chrom_map))
+sex_chrom_ali$qname <- sex_chrom_map[sex_chrom_ali$qname]
+dotplot(sex_chrom_ali, order_by="qstart" ,label_seqs=TRUE, dashes=FALSE)
+```
+
+
+```{r}
+hq_parrots_no_Z <- subset(hq_parrots, qname != "CM013773.2")
+kea_wing <- "#D73202"
+ggplot(hq_parrots_no_Z, aes(alen/tlen)) + 
+    geom_histogram(fill=kea_wing, colour='black', binwidth=0.05) + 
+    scale_x_continuous()
+```
+
+```{r}
+subset(hq_parrots, alen /tlen > 0.99)
+```
+
+
